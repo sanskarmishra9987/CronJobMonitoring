@@ -33,6 +33,7 @@ func NewRouter(pool *pgxpool.Pool, vc *vaultpkg.Client, runner RunnerNotifier, f
 		r.Delete("/api/monitors/{id}", mh.delete)
 		r.Patch("/api/monitors/{id}/toggle", mh.toggle)
 		r.Post("/api/monitors/{id}/check-now", mh.checkNow)
+		r.Post("/api/monitors/{id}/heartbeat", mh.heartbeat)
 
 		sh := &statusHandlers{pool: pool}
 		r.Get("/api/status", sh.all)

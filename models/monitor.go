@@ -18,4 +18,5 @@ type Monitor struct {
 	Config       json.RawMessage `json:"config"`
 	CreatedAt    time.Time       `json:"created_at"`
 	UpdatedAt    time.Time       `json:"updated_at"`
+	LastHeartbeatAt *time.Time   `json:"last_heartbeat_at,omitempty"`
 }

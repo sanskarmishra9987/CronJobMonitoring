@@ -5,9 +5,9 @@ import StatusBadge from '../components/StatusBadge'
 import type { MonitorStatus } from '../types'
 
 export default function Dashboard() {
-  const [statuses, setStatuses] = useState<MonitorStatus[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
+  const [statuses, setStatuses]     = useState<MonitorStatus[]>([])
+  const [loading, setLoading]       = useState(true)
+  const [error, setError]           = useState('')
   const navigate = useNavigate()
 
   async function load() {
@@ -35,7 +35,7 @@ export default function Dashboard() {
     <div className="min-h-screen bg-gray-50">
       <header className="bg-white border-b px-6 py-4 flex items-center justify-between">
         <h1 className="text-xl font-semibold text-gray-900">Monitoring</h1>
-        <div className="flex gap-3">
+        <div className="flex gap-3 items-center">
           <Link to="/settings" className="text-sm text-gray-500 hover:text-gray-700 px-3 py-2">Settings</Link>
           <button
             onClick={() => { clearToken(); navigate('/login') }}
@@ -43,6 +43,7 @@ export default function Dashboard() {
           >
             Sign out
           </button>
+
           <Link
             to="/monitors/new"
             className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors"
@@ -75,7 +76,9 @@ export default function Dashboard() {
         ) : statuses.length === 0 ? (
           <div className="text-center py-20 text-gray-400">
             <p className="text-lg mb-2">No monitors yet</p>
-            <Link to="/monitors/new" className="text-blue-600 hover:underline text-sm">Add your first monitor →</Link>
+            <p className="text-sm mb-1">
+              <Link to="/monitors/new" className="text-blue-600 hover:underline">Add your first monitor →</Link>
+            </p>
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">

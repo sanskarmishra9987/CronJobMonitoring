@@ -40,7 +40,7 @@ func safeVault(c *vaultpkg.Client) checks.VaultReader {
 func (h *monitorHandlers) list(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.pool.Query(r.Context(), `
 		SELECT id, name, description, monitor_type, enabled,
-		       interval_secs, timeout_secs, config, created_at, updated_at
+		       interval_secs, timeout_secs, config, created_at, updated_at, last_heartbeat_at
 		FROM monitors ORDER BY name
 	`)
 	if err != nil {
@@ -53,7 +53,7 @@ func (h *monitorHandlers) list(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var m models.Monitor
 		if err := rows.Scan(&m.ID, &m.Name, &m.Description, &m.MonitorType, &m.Enabled,
-			&m.IntervalSecs, &m.TimeoutSecs, &m.Config, &m.CreatedAt, &m.UpdatedAt); err != nil {
+			&m.IntervalSecs, &m.TimeoutSecs, &m.Config, &m.CreatedAt, &m.UpdatedAt, &m.LastHeartbeatAt); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
@@ -72,10 +72,10 @@ func (h *monitorHandlers) get(w http.ResponseWriter, r *http.Request) {
 	var m models.Monitor
 	err = h.pool.QueryRow(r.Context(), `
 		SELECT id, name, description, monitor_type, enabled,
-		       interval_secs, timeout_secs, config, created_at, updated_at
+		       interval_secs, timeout_secs, config, created_at, updated_at, last_heartbeat_at
 		FROM monitors WHERE id = $1
 	`, id).Scan(&m.ID, &m.Name, &m.Description, &m.MonitorType, &m.Enabled,
-		&m.IntervalSecs, &m.TimeoutSecs, &m.Config, &m.CreatedAt, &m.UpdatedAt)
+		&m.IntervalSecs, &m.TimeoutSecs, &m.Config, &m.CreatedAt, &m.UpdatedAt, &m.LastHeartbeatAt)
 	if err == pgx.ErrNoRows {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 		return
@@ -186,6 +186,33 @@ func (h *monitorHandlers) delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// heartbeat is the "check-in" endpoint. An external service (cron job, worker,
+// agent — anything that can't be reached directly) calls this on its own
+// schedule to say "I'm still alive." We just stamp the current time.
+// The actual up/down decision happens later, in runHeartbeat, by comparing
+// this timestamp against how much time has passed.
+func (h *monitorHandlers) heartbeat(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid id"})
+		return
+	}
+
+	tag, err := h.pool.Exec(r.Context(), `
+		UPDATE monitors SET last_heartbeat_at = now() WHERE id = $1
+	`, id)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "received"})
+}
+
 func (h *monitorHandlers) toggle(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
@@ -221,10 +248,10 @@ func (h *monitorHandlers) checkNow(w http.ResponseWriter, r *http.Request) {
 	var m models.Monitor
 	err = h.pool.QueryRow(r.Context(), `
 		SELECT id, name, description, monitor_type, enabled,
-		       interval_secs, timeout_secs, config, created_at, updated_at
+		       interval_secs, timeout_secs, config, created_at, updated_at, last_heartbeat_at
 		FROM monitors WHERE id = $1
 	`, id).Scan(&m.ID, &m.Name, &m.Description, &m.MonitorType, &m.Enabled,
-		&m.IntervalSecs, &m.TimeoutSecs, &m.Config, &m.CreatedAt, &m.UpdatedAt)
+		&m.IntervalSecs, &m.TimeoutSecs, &m.Config, &m.CreatedAt, &m.UpdatedAt, &m.LastHeartbeatAt)
 	if err == pgx.ErrNoRows {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 		return
@@ -237,7 +264,24 @@ func (h *monitorHandlers) checkNow(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(m.TimeoutSecs)*time.Second)
 	defer cancel()
 
-	result := checks.Run(ctx, m.MonitorType, m.Config, safeVault(h.vault))
+	checkConfig := m.Config
+	if m.MonitorType == "heartbeat" {
+		// last_heartbeat_at lives in the monitors table (it's updated by a
+		// separate, frequent endpoint), not in the user-edited config JSON.
+		// We merge it in here, right before running the check, so that
+		// checks.Run / runHeartbeat can stay a pure function that only
+		// looks at its config argument.
+		var cfgMap map[string]any
+		_ = json.Unmarshal(m.Config, &cfgMap)
+		if cfgMap == nil {
+			cfgMap = map[string]any{}
+		}
+		cfgMap["last_heartbeat_at"] = m.LastHeartbeatAt
+		merged, _ := json.Marshal(cfgMap)
+		checkConfig = merged
+	}
+
+	result := checks.Run(ctx, m.MonitorType, checkConfig, safeVault(h.vault))
 
 	var detailJSON json.RawMessage
 	if result.Detail != nil {

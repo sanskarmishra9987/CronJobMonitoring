@@ -36,7 +36,17 @@ func Run(ctx context.Context, monitorType string, config json.RawMessage, vault 
 		return runHTTP(ctx, config)
 	case "postgres", "postgresql":
 		return runPostgres(ctx, config, vault)
+	case "heartbeat":
+		return runHeartbeat(ctx, config)
+	case "script":
+		return runScript(ctx, config)
+	case "docker":
+		return runDocker(ctx, config)
+	case "zabbix":
+		return runZabbix(ctx, config)
+	case "custom":
+		return runCustom(ctx, config)
 	default:
 		return Result{Status: StatusUnknown, Error: "unsupported monitor type: " + monitorType}
 	}
-}
+}	

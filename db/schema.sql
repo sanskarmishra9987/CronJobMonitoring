@@ -8,8 +8,11 @@ CREATE TABLE IF NOT EXISTS monitors (
     timeout_secs  INT NOT NULL DEFAULT 10,
     config        JSONB NOT NULL DEFAULT '{}',
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_heartbeat_at TIMESTAMPTZ
 );
+
+ALTER TABLE monitors ADD COLUMN IF NOT EXISTS last_heartbeat_at TIMESTAMPTZ;
 
 CREATE TABLE IF NOT EXISTS check_results (
     id            BIGSERIAL PRIMARY KEY,
