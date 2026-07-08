@@ -5,6 +5,7 @@ import MonitorForm from './pages/MonitorForm'
 import MonitorDetail from './pages/MonitorDetail'
 import Login from './components/Login'
 import Settings from './pages/Settings'
+import AlertToastStack from './components/AlertToastStack'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   return isAuthenticated() ? <>{children}</> : <Navigate to="/login" replace />
@@ -13,6 +14,7 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 export default function App() {
   return (
     <BrowserRouter>
+      {isAuthenticated() && <AlertToastStack />}
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/" element={<RequireAuth><Dashboard /></RequireAuth>} />

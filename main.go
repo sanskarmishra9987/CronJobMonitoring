@@ -10,6 +10,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gorilla/websocket"
+
 	"monitoring/api"
 	"monitoring/config"
 	"monitoring/db"
@@ -19,6 +21,29 @@ import (
 
 //go:embed frontend/dist
 var frontendFS embed.FS
+
+var upgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool { return true }, // tighten this in production
+}
+
+func wsHandler(hub *runner.Hub) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			slog.Error("ws upgrade failed", "err", err)
+			return
+		}
+		slog.Info("ws client connected")
+		hub.AddClient(conn)
+		defer hub.RemoveClient(conn)
+
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				break
+			}
+		}
+	}
+}
 
 func main() {
 	cfg := config.Load()
@@ -54,12 +79,17 @@ func main() {
 		}
 	}
 
-	r := runner.New(pool, vc)
+	hub := runner.NewHub()
+	r := runner.New(pool, vc, hub)
 	r.Start()
+
+	mux := http.NewServeMux()
+	mux.Handle("/", api.NewRouter(pool, vc, r, hub, frontendFS))
+	mux.HandleFunc("/ws/alerts", wsHandler(hub))
 
 	srv := &http.Server{
 		Addr:         ":" + cfg.Port,
-		Handler:      api.NewRouter(pool, vc, r, frontendFS),
+		Handler:      mux,
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 30 * time.Second,
 	}

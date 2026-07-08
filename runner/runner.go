@@ -22,21 +22,23 @@ type job struct {
 type Runner struct {
 	pool  *pgxpool.Pool
 	vault *vaultpkg.Client
+	hub   *Hub
 	mu    sync.Mutex
 	jobs  map[uuid.UUID]*job
 }
 
-func New(pool *pgxpool.Pool, vc *vaultpkg.Client) *Runner {
+func New(pool *pgxpool.Pool, vc *vaultpkg.Client, hub *Hub) *Runner {
 	return &Runner{
 		pool:  pool,
 		vault: vc,
+		hub:   hub,
 		jobs:  make(map[uuid.UUID]*job),
 	}
 }
 
 func (r *Runner) Start() {
 	rows, err := r.pool.Query(context.Background(), `
-		SELECT id, monitor_type, enabled, interval_secs, timeout_secs, config
+		SELECT id, name, monitor_type, enabled, interval_secs, timeout_secs, config
 		FROM monitors WHERE enabled = true
 	`)
 	if err != nil {
@@ -47,7 +49,7 @@ func (r *Runner) Start() {
 
 	for rows.Next() {
 		var m models.Monitor
-		if err := rows.Scan(&m.ID, &m.MonitorType, &m.Enabled, &m.IntervalSecs, &m.TimeoutSecs, &m.Config); err != nil {
+		if err := rows.Scan(&m.ID, &m.Name, &m.MonitorType, &m.Enabled, &m.IntervalSecs, &m.TimeoutSecs, &m.Config); err != nil {
 			slog.Error("runner: scan monitor", "err", err)
 			continue
 		}
@@ -68,13 +70,12 @@ func (r *Runner) Stop() {
 	slog.Info("runner stopped")
 }
 
-// Reload is called by the API after a monitor is created, updated, or toggled.
 func (r *Runner) Reload(id uuid.UUID) {
 	var m models.Monitor
 	err := r.pool.QueryRow(context.Background(), `
-		SELECT id, monitor_type, enabled, interval_secs, timeout_secs, config
+		SELECT id, name, monitor_type, enabled, interval_secs, timeout_secs, config
 		FROM monitors WHERE id = $1
-	`, id).Scan(&m.ID, &m.MonitorType, &m.Enabled, &m.IntervalSecs, &m.TimeoutSecs, &m.Config)
+	`, id).Scan(&m.ID, &m.Name, &m.MonitorType, &m.Enabled, &m.IntervalSecs, &m.TimeoutSecs, &m.Config)
 	if err != nil {
 		slog.Error("runner: reload monitor", "id", id, "err", err)
 		return
@@ -86,7 +87,6 @@ func (r *Runner) Reload(id uuid.UUID) {
 	r.startJob(m)
 }
 
-// Remove is called by the API when a monitor is deleted.
 func (r *Runner) Remove(id uuid.UUID) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -109,7 +109,7 @@ func (r *Runner) startJob(m models.Monitor) {
 	go func() {
 		ticker := time.NewTicker(time.Duration(m.IntervalSecs) * time.Second)
 		defer ticker.Stop()
-		r.runCheck(ctx, m) // run once immediately on start
+		r.runCheck(ctx, m)
 		for {
 			select {
 			case <-ticker.C:
@@ -132,6 +132,13 @@ func (r *Runner) runCheck(ctx context.Context, m models.Monitor) {
 		detailJSON, _ = json.Marshal(result.Detail)
 	}
 
+	var lastStatus string
+	_ = r.pool.QueryRow(ctx, `
+		SELECT status FROM check_results 
+		WHERE monitor_id = $1 
+		ORDER BY checked_at DESC LIMIT 1
+	`, m.ID).Scan(&lastStatus)
+
 	_, err := r.pool.Exec(ctx, `
 		INSERT INTO check_results (monitor_id, status, latency_ms, detail, error_message)
 		VALUES ($1, $2, $3, $4, $5)
@@ -140,10 +147,22 @@ func (r *Runner) runCheck(ctx context.Context, m models.Monitor) {
 		slog.Error("runner: write result", "monitor_id", m.ID, "err", err)
 	}
 
+	if lastStatus != "" && lastStatus != string(result.Status) && r.hub != nil {
+		slog.Info("broadcasting alert", "monitor", m.Name, "from", lastStatus, "to", result.Status)
+		r.hub.Broadcast(AlertEvent{
+			Type:      "status_change",
+			MonitorID: m.ID,
+			Name:      m.Name,
+			OldStatus: lastStatus,
+			NewStatus: string(result.Status),
+			Error:     result.Error,
+			Timestamp: time.Now(),
+		})
+	}
+
 	slog.Debug("check done", "monitor_id", m.ID, "status", result.Status, "latency_ms", result.LatencyMs)
 }
 
-// cleanupLoop deletes check_results older than 30 days, runs nightly.
 func (r *Runner) cleanupLoop() {
 	ticker := time.NewTicker(24 * time.Hour)
 	for range ticker.C {

@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -22,10 +23,17 @@ type RunnerNotifier interface {
 	Remove(id uuid.UUID)
 }
 
+// AlertBroadcaster is satisfied by *runner.Hub without importing that package,
+// avoiding an import cycle (runner already imports things api depends on indirectly).
+type AlertBroadcaster interface {
+	BroadcastStatusChange(monitorID uuid.UUID, name, oldStatus, newStatus, errMsg string)
+}
+
 type monitorHandlers struct {
 	pool   *pgxpool.Pool
 	vault  *vaultpkg.Client
 	runner RunnerNotifier
+	hub    AlertBroadcaster
 }
 
 // safeVault converts a nil *vaultpkg.Client to a nil checks.VaultReader interface,
@@ -281,6 +289,15 @@ func (h *monitorHandlers) checkNow(w http.ResponseWriter, r *http.Request) {
 		checkConfig = merged
 	}
 
+	// grab the last known status BEFORE we insert the new result, so we can
+	// detect a real transition instead of just broadcasting every manual check.
+	var lastStatus string
+	_ = h.pool.QueryRow(r.Context(), `
+		SELECT status FROM check_results
+		WHERE monitor_id = $1
+		ORDER BY checked_at DESC LIMIT 1
+	`, id).Scan(&lastStatus)
+
 	result := checks.Run(ctx, m.MonitorType, checkConfig, safeVault(h.vault))
 
 	var detailJSON json.RawMessage
@@ -305,6 +322,11 @@ func (h *monitorHandlers) checkNow(w http.ResponseWriter, r *http.Request) {
 	cr.LatencyMs = result.LatencyMs
 	cr.Detail = detailJSON
 	cr.ErrorMessage = result.Error
+
+	if h.hub != nil && lastStatus != "" && lastStatus != string(result.Status) {
+		slog.Info("broadcasting alert (checkNow)", "monitor", m.Name, "from", lastStatus, "to", result.Status)
+		h.hub.BroadcastStatusChange(id, m.Name, lastStatus, string(result.Status), result.Error)
+	}
 
 	writeJSON(w, http.StatusOK, cr)
 }

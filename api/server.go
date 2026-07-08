@@ -12,7 +12,7 @@ import (
 	vaultpkg "monitoring/vault"
 )
 
-func NewRouter(pool *pgxpool.Pool, vc *vaultpkg.Client, runner RunnerNotifier, frontendFS embed.FS) http.Handler {
+func NewRouter(pool *pgxpool.Pool, vc *vaultpkg.Client, runner RunnerNotifier, hub AlertBroadcaster, frontendFS embed.FS) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
 	r.Use(corsMiddleware)
@@ -25,7 +25,7 @@ func NewRouter(pool *pgxpool.Pool, vc *vaultpkg.Client, runner RunnerNotifier, f
 	r.Group(func(r chi.Router) {
 		r.Use(bearerAuth(pool))
 
-		mh := &monitorHandlers{pool: pool, vault: vc, runner: runner}
+		mh := &monitorHandlers{pool: pool, vault: vc, runner: runner, hub: hub}
 		r.Get("/api/monitors", mh.list)
 		r.Post("/api/monitors", mh.create)
 		r.Get("/api/monitors/{id}", mh.get)

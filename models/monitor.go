@@ -1,3 +1,5 @@
+//monitor.go stores the monitor's configuration.
+
 package models
 
 import (

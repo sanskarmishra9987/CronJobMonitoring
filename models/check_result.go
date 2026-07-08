@@ -1,3 +1,4 @@
+//check_result.go stores the result/history of each monitor check.
 package models
 
 import (
