@@ -35,7 +35,7 @@ The whole app — REST API, WebSocket alerts, and the React frontend — ships a
 
 ```powershell
 # clone
-git clone https://github.com/sanskarmishra9987/CronJobMonitoring.git
+git clone https://github.com/AVR003/CronJobMonitoring.git
 cd CronJobMonitoring
 
 # configure environment
